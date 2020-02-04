@@ -13,7 +13,7 @@
 #define ID_IP_TEXTBOX 4
 #define ID_PORT_TEXTBOX 5
 #define ID_CONNECT_BUTTON 6
-#define DEFAULT_PORT 7778
+#define ID_CAM_BUTTON 7
 
 namespace main_window {
 	constexpr char APP_NAME[] = "videochat";
@@ -34,11 +34,13 @@ struct MainWindow
 	HWND hWnd;
 	HWND hSendButton;
 	HWND hConnectButton;
+	HWND hCamButton;
 	HWND hSendTextbox;
 	HWND hIPTextbox;
 	HWND hPortTextbox;
 	HWND hChatList;
 	std::atomic<bool> isConnected;
+	std::atomic<bool> isRecording;
 	std::thread recorder;
 	std::thread receiver;
 	SOCKET sock;
@@ -92,7 +94,7 @@ bool add_string_to_listbox(HWND hListbox, const char* str)
 	return true;
 }
 
-void record(HWND hWnd, SOCKET sock)
+void record(HWND hWnd, SOCKET& sock, std::atomic<bool>& isRecording)
 {
 
 	cv::VideoCapture vCap(cv::CAP_ANY);
@@ -100,11 +102,12 @@ void record(HWND hWnd, SOCKET sock)
 	{
 		MessageBox(hWnd, "Can't initialize camera.", "Error", MB_OK | MB_ICONERROR);
 		vCap.release();
+		isRecording = false;
 		return;
 	}
 	cv::Mat img = cv::Mat::zeros(cv::Size(frame::WIDTH, frame::HEIGHT), CV_8UC3);
 	DWORD* pixels = new DWORD[frame::WIDTH * frame::HEIGHT];
-	while (vCap.read(img))
+	while (vCap.read(img) && isRecording.load())
 	{
 		cv::resize(img, img, cv::Size(frame::WIDTH, frame::HEIGHT));
 
@@ -113,8 +116,7 @@ void record(HWND hWnd, SOCKET sock)
 
 		buf.push_back(message_codes::FRAME);
 		
-		if(send(sock, (const char*)buf.data(), buf.size(), 0) == SOCKET_ERROR)
-			break;
+		send(sock, (const char*)buf.data(), buf.size(), 0);
 
 		for (size_t i = 0; i < frame::WIDTH * frame::HEIGHT; ++i)
 			pixels[i] = *((DWORD*)&img.data[i*3]);
@@ -128,6 +130,7 @@ void record(HWND hWnd, SOCKET sock)
 
 		cv::waitKey(FRAME_DELAY);
 	}
+	isRecording = false;
 	delete[] pixels;
 	vCap.release();
 }
@@ -138,16 +141,13 @@ void receive(MainWindow& self)
 	std::vector<uchar> buf;
 	cv::Mat img;
 	buf.reserve(BUFSIZE);
-	buf.resize(BUFSIZE);
 	while (true)
 	{
+		buf.resize(BUFSIZE);
 		int result = recv(self.sock, (char*)buf.data(), buf.capacity(), 0);
 
 		if (result == 0 || result == SOCKET_ERROR)
 		{
-			if (self.recorder.joinable())
-				self.recorder.join();
-
 			if(closesocket(self.sock) == SOCKET_ERROR)
 				return;
 		
@@ -168,8 +168,12 @@ void receive(MainWindow& self)
 		}
 		case message_codes::READY:
 		{
-			self.recorder = std::thread(record, self.hWnd, self.sock);
 			add_string_to_listbox(self.hChatList, "Service: user connected");
+			break;
+		}
+		case message_codes::DISCONNECTED:
+		{
+			add_string_to_listbox(self.hChatList, "Service: user disconnected");
 			break;
 		}
 		case message_codes::TEXT:
@@ -208,8 +212,9 @@ bool send_text(SOCKET& sock, char* text)
 {
 	size_t len = strlen(text);
 	text[len] = message_codes::TEXT;
-	if(send(sock, text, len+1, 0) == SOCKET_ERROR)
-		return false;
+	bool result = !(send(sock, text, len + 1, 0) == SOCKET_ERROR);
+	text[len] = 0;
+	return result;
 }
 
 bool server_connect(SOCKET& sock, const char* ip, const char* port)
@@ -248,13 +253,16 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 		
 		self.hWnd = hWnd;
 		self.hSendButton = CreateWindow("button", "Send", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30*2, 80, 30, hWnd, (HMENU)ID_SEND_BUTTON, 0, NULL);
+		self.hCamButton = CreateWindow("button", "Cam on/off", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30*3, 80, 30, hWnd, (HMENU)ID_CAM_BUTTON, 0, NULL);
 		self.hConnectButton = CreateWindow("button", "Connect", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30, 80, 30, hWnd, (HMENU)ID_CONNECT_BUTTON, 0, NULL);
-		self.hSendTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT | ES_MULTILINE, frame::WIDTH, main_window::HEIGHT-30*2, frame::WIDTH-80, 30, hWnd, (HMENU)ID_SEND_TEXTBOX, 0, NULL);
+		self.hSendTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT | ES_MULTILINE, frame::WIDTH, main_window::HEIGHT-30*3, frame::WIDTH-80, 30*2, hWnd, (HMENU)ID_SEND_TEXTBOX, 0, NULL);
 		self.hIPTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT | ES_MULTILINE, frame::WIDTH, main_window::HEIGHT-30, frame::WIDTH-160, 30, hWnd, (HMENU)ID_IP_TEXTBOX, 0, NULL);
 		self.hPortTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT | ES_MULTILINE, frame::WIDTH+180, main_window::HEIGHT-30, frame::WIDTH-260, 30, hWnd, (HMENU)ID_PORT_TEXTBOX, 0, NULL);
-		self.hChatList = CreateWindow("listbox", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_HASSTRINGS | WS_VSCROLL, frame::WIDTH, 0, main_window::WIDTH-frame::WIDTH, main_window::HEIGHT-30*2, hWnd, (HMENU)ID_CHAT_LIST, 0, NULL);
+		self.hChatList = CreateWindow("listbox", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_HASSTRINGS | WS_VSCROLL, frame::WIDTH, 0, main_window::WIDTH-frame::WIDTH, main_window::HEIGHT-30*3, hWnd, (HMENU)ID_CHAT_LIST, 0, NULL);
 		self.receiver = std::thread();
 		self.recorder = std::thread();
+		self.isConnected = false;
+		self.isRecording = false;
 
 		return DefWindowProc(hWnd, uMsg, wParam, lParam);
 	}
@@ -275,6 +283,8 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 
 		if (self.receiver.joinable())
 			self.receiver.join();
+		if (self.recorder.joinable())
+			self.recorder.join();
 		WSACleanup();
 		PostQuitMessage(0);
 		return 0;
@@ -289,14 +299,23 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 			{
 			case ID_SEND_BUTTON:
 			{
-				char message[128];
-				*(WORD*)message = 128;
-				message[SendMessage(self.hSendTextbox, EM_GETLINE, NULL, LPARAM(message))] = 0;
-				char text[135] = "You: ";
-				strcat_s(text, message);
-				add_string_to_listbox(self.hChatList, text);
-				if(!send_text(self.sock, message))
-					MessageBox(hWnd, "Error sending message", "Error", MB_OK);
+				for (int i = 0; i < 3; ++i)
+				{
+					char message[128];
+					*(WORD*)message = 128;
+					message[SendMessage(self.hSendTextbox, EM_GETLINE, i, LPARAM(message))] = 0;
+					if (strlen(message) == 0)
+						continue;
+					if (!send_text(self.sock, message))
+					{
+						MessageBox(hWnd, "Error sending message", "Error", MB_OK);
+						break;
+					}
+					Sleep(10);
+					char text[135] = "You: ";
+					strcat_s(text, message);
+					add_string_to_listbox(self.hChatList, text);
+				}
 				break;
 			}
 			case ID_CONNECT_BUTTON:
@@ -320,6 +339,22 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 					if (self.receiver.joinable())
 						self.receiver.join();
 					self.receiver = std::thread(receive, std::ref(self));
+				}
+				break;
+			}
+			case ID_CAM_BUTTON:
+			{
+				if (self.isRecording.load())
+				{
+					self.isRecording = false;
+					self.recorder.join();
+				}
+				else
+				{
+					if (self.recorder.joinable())
+						self.recorder.join();
+					self.isRecording = true;
+					self.recorder = std::thread(record, hWnd, std::ref(self.sock), std::ref(self.isRecording));
 				}
 				break;
 			}
