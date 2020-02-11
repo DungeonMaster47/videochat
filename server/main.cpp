@@ -1,17 +1,15 @@
 #include <Windows.h>
-#include <ShlObj.h>
 #include <vector>
 #include <thread>
 #include <fstream>
 #include "tinyxml/tinyxml.h"
 #include "tinyxml/tinystr.h"
+#include "Log.h"
 #include "..\videochat\message_codes.h"
 #pragma comment(lib,"ws2_32.lib")
 
 constexpr int	DEFAULT_PORT = 7778;
-constexpr auto  BUFSIZE = 320 * 240 * 24;
-constexpr WCHAR DIR_NAME[] = L"\\videochat_server\\";
-constexpr WCHAR LOG_NAME[] = L"log.txt";
+constexpr size_t  BUFSIZE = 320 * 240 * 24;
 constexpr WCHAR CONFIG_NAME[] = L"config.xml";
 WCHAR SERVICE_NAME[] = L"videochat_server";
 
@@ -19,7 +17,7 @@ SERVICE_STATUS        g_ServiceStatus = { 0 };
 SERVICE_STATUS_HANDLE g_StatusHandle = NULL;
 HANDLE                g_ServiceStopEvent = INVALID_HANDLE_VALUE;
 
-void receive_and_send(SOCKET sender, SOCKET receiver)
+void ReceiveAndSend(SOCKET sender, SOCKET receiver)
 {
 	char* buf = new char[BUFSIZE];
 	buf[0] = message_codes::READY;
@@ -39,42 +37,11 @@ void receive_and_send(SOCKET sender, SOCKET receiver)
 	delete[] buf;
 }
 
-BOOL DirectoryExists(LPCTSTR szPath)
-{
-	DWORD dwAttrib = GetFileAttributes(szPath);
-
-	return (dwAttrib != INVALID_FILE_ATTRIBUTES &&
-		(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
-}
-
-void get_app_dir(PWSTR dirpath)
-{
-	PWSTR user_dir = NULL;
-	SHGetKnownFolderPath(FOLDERID_ProgramFiles, 0, NULL, &user_dir);
-	lstrcpyW(dirpath, user_dir);
-	CoTaskMemFree(user_dir);
-	lstrcatW(dirpath, DIR_NAME);
-}
-
-std::ofstream get_log()
-{
-	WCHAR dirpath[MAX_PATH];
-	get_app_dir(dirpath);
-	WCHAR filepath[MAX_PATH];
-	lstrcpyW(filepath, dirpath);
-	lstrcatW(filepath,LOG_NAME);
-	if (!DirectoryExists(dirpath))
-		CreateDirectoryW(dirpath, NULL);
-	std::ofstream log;
-	log.open(filepath, std::ios::app);
-	return  log;
-}
-
-int get_port()
+int GetPort()
 {
 	WCHAR filepath[MAX_PATH];
 	CHAR filepathA[MAX_PATH];
-	get_app_dir(filepath);
+	GetAppDir(filepath);
 	lstrcatW(filepath, CONFIG_NAME);
 	WideCharToMultiByte(CP_ACP, 0, filepath, -1, filepathA, MAX_PATH, NULL, NULL);
 	TiXmlDocument config;
@@ -88,32 +55,32 @@ int get_port()
 DWORD WINAPI ServiceWorkerThread(LPVOID lpParam)
 {
 	SOCKET listen_socket = socket(AF_INET, SOCK_STREAM, NULL);
-	if (listen_socket == SOCKET_ERROR)
+	if (SOCKET_ERROR == listen_socket)
 		return WSAGetLastError();
 
 	SOCKADDR_IN addr;
 	int addrl = sizeof(addr);
 	addr.sin_addr.S_un.S_addr = INADDR_ANY;
-	addr.sin_port = htons(get_port());
+	addr.sin_port = htons(GetPort());
 	addr.sin_family = AF_INET;
 
-	if (bind(listen_socket, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+	if (SOCKET_ERROR == bind(listen_socket, (struct sockaddr*)&addr, sizeof(addr))) {
 		return WSAGetLastError();
 	}
 
-	if (listen(listen_socket, SOMAXCONN) == SOCKET_ERROR) {
+	if (SOCKET_ERROR == listen(listen_socket, SOMAXCONN)) {
 		return WSAGetLastError();
 	}
 
 	u_long mode = 1;
 
-	if (ioctlsocket(listen_socket, FIONBIO, &mode) == SOCKET_ERROR) {
+	if (SOCKET_ERROR == ioctlsocket(listen_socket, FIONBIO, &mode)) {
 		return WSAGetLastError();
 	}
 
 	mode = 0;
 
-	int client_sockets[2] = { INVALID_SOCKET, INVALID_SOCKET };
+	SOCKET client_sockets[2] = { INVALID_SOCKET, INVALID_SOCKET };
 	std::thread client_thread;
 
 	int i = 0;
@@ -122,18 +89,20 @@ DWORD WINAPI ServiceWorkerThread(LPVOID lpParam)
 	{
 		if (i < 2)
 		{
-			client_sockets[i] = accept(listen_socket, NULL, NULL);
+			sockaddr_in client_addr;
+			int addr_size = sizeof(client_addr);
+			client_sockets[i] = accept(listen_socket, (sockaddr*)&client_addr, &addr_size);
 			if (client_sockets[i] != SOCKET_ERROR)
 			{
-				get_log() << "user connected" << std::endl;
+				*Log::getInstance() << "user connected: " << inet_ntoa(client_addr.sin_addr) << std::endl;
 				ioctlsocket(client_sockets[i], FIONBIO, &mode);
 				char msg = message_codes::WAIT;
 				send(client_sockets[i], &msg, 1, 0);
 				++i;
 				if (i == 2)
 				{
-					client_thread = std::thread(receive_and_send, client_sockets[1], client_sockets[0]);
-					receive_and_send(client_sockets[0], client_sockets[1]);
+					client_thread = std::thread(ReceiveAndSend, client_sockets[1], client_sockets[0]);
+					ReceiveAndSend(client_sockets[0], client_sockets[1]);
 					closesocket(client_sockets[0]);
 					closesocket(client_sockets[1]);
 					client_thread.join();
@@ -175,8 +144,6 @@ VOID WINAPI ServiceCtrlHandler(DWORD CtrlCode)
 
 VOID WINAPI ServiceMain(DWORD argc, LPTSTR *argv)
 {
-	DWORD Status = E_FAIL;
-
 	g_StatusHandle = RegisterServiceCtrlHandler(SERVICE_NAME, ServiceCtrlHandler);
 
 	if (g_StatusHandle == NULL)
