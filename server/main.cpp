@@ -5,6 +5,7 @@
 #include "tinyxml/tinyxml.h"
 #include "tinyxml/tinystr.h"
 #include "Log.h"
+#include "..\videochat\Socket.h"
 #include "..\videochat\message_codes.h"
 #pragma comment(lib,"ws2_32.lib")
 
@@ -17,23 +18,24 @@ SERVICE_STATUS        g_ServiceStatus = { 0 };
 SERVICE_STATUS_HANDLE g_StatusHandle = NULL;
 HANDLE                g_ServiceStopEvent = INVALID_HANDLE_VALUE;
 
-void ReceiveAndSend(SOCKET sender, SOCKET receiver)
+void ReceiveAndSend(Socket& sender, Socket& receiver)
 {
 	char* buf = new char[BUFSIZE];
 	buf[0] = message_codes::READY;
-	send(receiver, buf, 1, 0);
+	receiver.send(buf, 1);
 	while (WaitForSingleObject(g_ServiceStopEvent, 0) != WAIT_OBJECT_0)
 	{
-		int len = recv(sender, buf, BUFSIZE, 0);
-		if(len == 0 || len == SOCKET_ERROR)
+		int len = sender.recv(buf, BUFSIZE);
+		if(!sender.is_connected())
 		{
 			buf[0] = message_codes::DISCONNECTED;
-			send(receiver, buf, 1, 0);
+			receiver.send(buf, 1);
 			break;
 		}
-		if (send(receiver, buf, len, 0) == SOCKET_ERROR)
+		if (receiver.send(buf, len) == SOCKET_ERROR)
 			break;
 	}
+	receiver.close();
 	delete[] buf;
 }
 
@@ -54,57 +56,60 @@ int GetPort()
 
 DWORD WINAPI ServiceWorkerThread(LPVOID lpParam)
 {
-	SOCKET listen_socket = socket(AF_INET, SOCK_STREAM, NULL);
-	if (SOCKET_ERROR == listen_socket)
-		return WSAGetLastError();
+	Socket listen_socket;
 
-	SOCKADDR_IN addr;
-	int addrl = sizeof(addr);
-	addr.sin_addr.S_un.S_addr = INADDR_ANY;
-	addr.sin_port = htons(GetPort());
-	addr.sin_family = AF_INET;
-
-	if (SOCKET_ERROR == bind(listen_socket, (struct sockaddr*)&addr, sizeof(addr))) {
-		return WSAGetLastError();
+	if (!listen_socket.create())
+	{
+		int error = WSAGetLastError();
+		*Log::getInstance() << "Error: " << error << std::endl;
+		return error;
 	}
 
-	if (SOCKET_ERROR == listen(listen_socket, SOMAXCONN)) {
-		return WSAGetLastError();
+	if(!listen_socket.bind(GetPort()))
+	{
+		int error = WSAGetLastError();
+		*Log::getInstance() << "Error: " << error << std::endl;
+		return error;
 	}
 
-	u_long mode = 1;
-
-	if (SOCKET_ERROR == ioctlsocket(listen_socket, FIONBIO, &mode)) {
-		return WSAGetLastError();
+	if (!listen_socket.listen()) 
+	{
+		int error = WSAGetLastError();
+		*Log::getInstance() << "Error: " << error << std::endl;
+		return error;
 	}
 
-	mode = 0;
+	if (!listen_socket.set_non_blocking_mode()) 
+	{
+		int error = WSAGetLastError();
+		*Log::getInstance() << "Error: " << error << std::endl;
+		return error;
+	}
 
-	SOCKET client_sockets[2] = { INVALID_SOCKET, INVALID_SOCKET };
+	Socket client_sockets[2] = { INVALID_SOCKET, INVALID_SOCKET };
 	std::thread client_thread;
 
 	int i = 0;
 
+	*Log::getInstance() << "begin listening" << std::endl;
 	while (WaitForSingleObject(g_ServiceStopEvent, 0) != WAIT_OBJECT_0)
 	{
 		if (i < 2)
 		{
 			sockaddr_in client_addr;
 			int addr_size = sizeof(client_addr);
-			client_sockets[i] = accept(listen_socket, (sockaddr*)&client_addr, &addr_size);
-			if (client_sockets[i] != SOCKET_ERROR)
+			client_sockets[i] = listen_socket.accept((sockaddr*)&client_addr, &addr_size);
+			if (client_sockets[i].is_connected())
 			{
 				*Log::getInstance() << "user connected: " << inet_ntoa(client_addr.sin_addr) << std::endl;
-				ioctlsocket(client_sockets[i], FIONBIO, &mode);
+				client_sockets[i].set_blocking_mode();
 				char msg = message_codes::WAIT;
-				send(client_sockets[i], &msg, 1, 0);
+				client_sockets[i].send(&msg, 1);
 				++i;
 				if (i == 2)
 				{
-					client_thread = std::thread(ReceiveAndSend, client_sockets[1], client_sockets[0]);
+					client_thread = std::thread(ReceiveAndSend, std::ref(client_sockets[1]), std::ref(client_sockets[0]));
 					ReceiveAndSend(client_sockets[0], client_sockets[1]);
-					closesocket(client_sockets[0]);
-					closesocket(client_sockets[1]);
 					client_thread.join();
 					i = 0;
 				}
@@ -112,7 +117,7 @@ DWORD WINAPI ServiceWorkerThread(LPVOID lpParam)
 		}
 	}
 
-	closesocket(listen_socket);
+	listen_socket.close();
 	return ERROR_SUCCESS;
 }
 

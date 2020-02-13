@@ -11,7 +11,7 @@ Log* Log::getInstance()
 	return p_instance;
 }
 
-void Log::GetLog()
+void Log::getLog()
 {
 	WCHAR dirpath[MAX_PATH];
 	GetAppDir(dirpath);

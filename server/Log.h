@@ -11,9 +11,9 @@ private:
 	Log(const Log&) {};
 	Log& operator=(Log&) {};
 
-	void GetLog();
+	void getLog();
 
-	static Log * p_instance;
+	static Log* p_instance;
 	static std::mutex m_;
 	std::ofstream f;
 public:
@@ -24,7 +24,7 @@ public:
 		std::lock_guard<std::mutex> lock(m_);
 		if (!f.is_open())
 		{
-			GetLog();
+			getLog();
 		}
 		f << x;
 		return f;

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <string>
 #include "message_codes.h"
+#include "Socket.h"
 
 #pragma comment(lib,"ws2_32.lib")
 
@@ -43,7 +44,7 @@ struct MainWindow
 	std::atomic<bool> isRecording;
 	std::thread recorder;
 	std::thread receiver;
-	SOCKET sock;
+	Socket sock;
 };
 
 void DrawBitmap(HDC hDC, const int x, const int y, HBITMAP hBitmap)
@@ -84,8 +85,30 @@ void DrawBitmap(HDC hDC, const int x, const int y, HBITMAP hBitmap)
 
 bool AddStringToListBox(HWND hListbox, const char* str)
 {
-	if(LB_ERR == SendMessage(hListbox, LB_ADDSTRING, NULL, (LPARAM)str))
-		return false;
+	std::string s(str);
+	size_t offset = 0;
+	offset = s.find('\n', offset);
+	if (std::string::npos == offset)
+	{
+		if (LB_ERR == SendMessage(hListbox, LB_ADDSTRING, NULL, (LPARAM)str))
+			return false;
+	}
+	else
+	{
+		size_t offset_old = 0;
+		while (std::string::npos != offset)
+		{
+			s[offset] = 0;
+			++offset;
+			if (LB_ERR == SendMessage(hListbox, LB_ADDSTRING, NULL, (LPARAM)s.c_str()+offset_old))
+				return false;
+			offset_old = offset;
+			offset = s.find('\n', offset);
+		}
+		if (LB_ERR == SendMessage(hListbox, LB_ADDSTRING, NULL, (LPARAM)s.c_str() + offset_old))
+			return false;
+	}
+
 	size_t lbn = SendMessage(hListbox, LB_GETCOUNT, NULL, NULL);	
 	if(LB_ERR == lbn)
 		return false;
@@ -94,7 +117,7 @@ bool AddStringToListBox(HWND hListbox, const char* str)
 	return true;
 }
 
-void Record(HWND hWnd, SOCKET& sock, std::atomic<bool>& isRecording)
+void Record(HWND hWnd, Socket& sock, std::atomic<bool>& isRecording)
 {
 
 	cv::VideoCapture vCap(cv::CAP_ANY);
@@ -116,7 +139,7 @@ void Record(HWND hWnd, SOCKET& sock, std::atomic<bool>& isRecording)
 
 		buf.push_back(message_codes::FRAME);
 		
-		send(sock, (const char*)buf.data(), buf.size(), 0);
+		sock.send((const char*)buf.data(), buf.size());
 
 		for (size_t i = 0; i < frame::WIDTH * frame::HEIGHT; ++i)
 			pixels[i] = *((DWORD*)&img.data[i*3]);
@@ -131,6 +154,25 @@ void Record(HWND hWnd, SOCKET& sock, std::atomic<bool>& isRecording)
 		cv::waitKey(FRAME_DELAY);
 	}
 	isRecording = false;
+
+	img = cv::Mat::zeros(cv::Size(frame::WIDTH, frame::HEIGHT), CV_8UC3);
+	std::vector<uchar> buf;
+	cv::imencode(".jpg", img, buf);
+
+	buf.push_back(message_codes::FRAME);
+
+	sock.send((const char*)buf.data(), (int)buf.size());
+
+	for (size_t i = 0; i < frame::WIDTH * frame::HEIGHT; ++i)
+		pixels[i] = 0;
+	
+	HBITMAP hBitmap = CreateBitmap(frame::WIDTH, frame::HEIGHT, 1, 32, pixels);
+
+	HDC hDC = GetDC(hWnd);
+	DrawBitmap(hDC, 0, 0, hBitmap);
+	ReleaseDC(hWnd, hDC);
+	DeleteObject(hBitmap);
+
 	delete[] pixels;
 	vCap.release();
 }
@@ -144,12 +186,12 @@ void Receive(MainWindow& self)
 	while (true)
 	{
 		buf.resize(BUFSIZE);
-		int result = recv(self.sock, (char*)buf.data(), buf.capacity(), 0);
+		int result = self.sock.recv((char*)buf.data(), (int)buf.capacity());
 
-		if (0 == result || SOCKET_ERROR == result)
+		if (!self.sock.is_connected())
 		{
-			if(SOCKET_ERROR == closesocket(self.sock))
-				return;
+			if(!self.sock.close())
+				break;
 		
 			AddStringToListBox(self.hChatList, "Service: server disconnected");
 
@@ -206,37 +248,27 @@ void Receive(MainWindow& self)
 		}
 
 	}
+
+	for (size_t i = 0; i < frame::WIDTH * frame::HEIGHT; ++i)
+		pixels[i] = 0;
+
+	HBITMAP hBitmap = CreateBitmap(frame::WIDTH, frame::HEIGHT, 1, 32, pixels);
+
+	HDC hDC = GetDC(self.hWnd);
+	DrawBitmap(hDC, 0, 0, hBitmap);
+	ReleaseDC(self.hWnd, hDC);
+	DeleteObject(hBitmap);
+
 	delete[] pixels;
 }
 
-bool SendText(SOCKET& sock, char* text)
+bool SendText(Socket& sock, char* text)
 {
 	size_t len = strlen(text);
 	text[len] = message_codes::TEXT;
-	bool result = !(SOCKET_ERROR == send(sock, text, len + 1, 0));
+	bool result = !(sock.send(text, (int)len + 1) == SOCKET_ERROR);
 	text[len] = 0;
 	return result;
-}
-
-bool ServerConnect(SOCKET& sock, const char* ip, const char* port)
-{
-	sock = socket(AF_INET, SOCK_STREAM, NULL);
-	if (SOCKET_ERROR == sock)
-		return false;
-
-	SOCKADDR_IN addr;
-
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = inet_addr(ip);
-	addr.sin_port = htons(atoi(port));
-
-	if (SOCKET_ERROR == connect(sock, (sockaddr*)&addr, sizeof(addr)))
-	{
-		closesocket(sock);
-		return false;
-	}
-
-	return true;
 }
 
 LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In_ LPARAM lParam)
@@ -257,8 +289,8 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 		self.hCamButton = CreateWindow("button", "Cam on/off", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30*3, 80, 30, hWnd, (HMENU)ID_CAM_BUTTON, 0, NULL);
 		self.hConnectButton = CreateWindow("button", "Connect", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30, 80, 30, hWnd, (HMENU)ID_CONNECT_BUTTON, 0, NULL);
 		self.hSendTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT | ES_MULTILINE, frame::WIDTH, main_window::HEIGHT-30*3, frame::WIDTH-80, 30*2, hWnd, (HMENU)ID_SEND_TEXTBOX, 0, NULL);
-		self.hIPTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT | ES_MULTILINE, frame::WIDTH+30, main_window::HEIGHT-30, frame::WIDTH-200, 30, hWnd, (HMENU)ID_IP_TEXTBOX, 0, NULL);
-		self.hPortTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT | ES_MULTILINE, frame::WIDTH+180, main_window::HEIGHT-30, frame::WIDTH-260, 30, hWnd, (HMENU)ID_PORT_TEXTBOX, 0, NULL);
+		self.hIPTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT , frame::WIDTH+30, main_window::HEIGHT-30, frame::WIDTH-200, 30, hWnd, (HMENU)ID_IP_TEXTBOX, 0, NULL);
+		self.hPortTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT , frame::WIDTH+180, main_window::HEIGHT-30, frame::WIDTH-260, 30, hWnd, (HMENU)ID_PORT_TEXTBOX, 0, NULL);
 		self.hChatList = CreateWindow("listbox", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_HASSTRINGS | WS_VSCROLL, frame::WIDTH, 0, main_window::WIDTH-frame::WIDTH, main_window::HEIGHT-30*3, hWnd, (HMENU)ID_CHAT_LIST, 0, NULL);
 		self.receiver = std::thread();
 		self.recorder = std::thread();
@@ -289,7 +321,7 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 	}
 	case WM_DESTROY:
 	{
-		closesocket(self.sock);
+		self.sock.close();
 		self.isRecording = false;
 		if (self.receiver.joinable())
 			self.receiver.join();
@@ -309,23 +341,25 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 			{
 			case ID_SEND_BUTTON:
 			{
-				for (int i = 0; i < 3; ++i)
+				char message[512] = {};
+				for (int i = 0; i < SendMessage(self.hSendTextbox, EM_GETLINECOUNT, 0, 0); ++i)
 				{
-					char message[128];
-					*(WORD*)message = 128;
-					message[SendMessage(self.hSendTextbox, EM_GETLINE, i, LPARAM(message))] = 0;
-					if (strlen(message) == 0)
+					char line[128] = {};
+					*(WORD*)line = 128;
+					line[SendMessage(self.hSendTextbox, EM_GETLINE, i, LPARAM(line))] = 0;
+					if (strlen(line) == 0)
 						continue;
-					if (!SendText(self.sock, message))
-					{
-						MessageBox(hWnd, "Error sending message", "Error", MB_OK);
-						break;
-					}
-					Sleep(10);
-					char text[135] = "You: ";
-					strcat_s(text, message);
-					AddStringToListBox(self.hChatList, text);
+					if(i != 0)
+						message[strlen(message)] = '\n';
+					strcat_s(message, line);
 				}
+				if (!SendText(self.sock, message))
+				{
+					MessageBox(hWnd, "Error sending message", "Error", MB_OK);
+				}
+				char text[512] = "You: ";
+				strcat_s(text, message);
+				AddStringToListBox(self.hChatList, text);
 				SetWindowText(self.hSendTextbox, 0);
 				break;
 			}
@@ -342,7 +376,7 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 				char port[16];
 				*(WORD*)port = 16;
 				port[SendMessage(self.hPortTextbox, EM_GETLINE, NULL, LPARAM(port))] = 0;
-				if (!ServerConnect(self.sock, ip, port))
+				if (!self.sock.connect(ip, port))
 					MessageBox(hWnd, "Error connecting to server", "Error", MB_OK);
 				else
 				{
@@ -414,6 +448,19 @@ int CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_ HINSTANCE hPrevInstance, _In
 
 	ShowWindow(hWnd, SW_SHOW);
 
+	DWORD* pixels = new DWORD[frame::WIDTH * frame::HEIGHT];
+
+	for (size_t i = 0; i < frame::WIDTH * frame::HEIGHT; ++i)
+		pixels[i] = 0;
+
+	HBITMAP hBitmap = CreateBitmap(frame::WIDTH, frame::HEIGHT, 1, 32, pixels);
+
+	HDC hDC = GetDC(hWnd);
+	DrawBitmap(hDC, 0, 0, hBitmap);
+	DrawBitmap(hDC, 0, frame::HEIGHT, hBitmap);
+	ReleaseDC(hWnd, hDC);
+	DeleteObject(hBitmap);
+
 	if (!hWnd)
 	{
 		MessageBox(NULL,
@@ -430,7 +477,7 @@ int CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_ HINSTANCE hPrevInstance, _In
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
-	return msg.wParam;
+	return (int)msg.wParam;
 }
 
 	
