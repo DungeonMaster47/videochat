@@ -253,9 +253,9 @@ void Receive(MainWindow& self)
 		pixels[i] = 0;
 
 	HBITMAP hBitmap = CreateBitmap(frame::WIDTH, frame::HEIGHT, 1, 32, pixels);
-
+	
 	HDC hDC = GetDC(self.hWnd);
-	DrawBitmap(hDC, 0, 0, hBitmap);
+	DrawBitmap(hDC, 0, frame::HEIGHT, hBitmap);
 	ReleaseDC(self.hWnd, hDC);
 	DeleteObject(hBitmap);
 
@@ -478,5 +478,3 @@ int CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_ HINSTANCE hPrevInstance, _In
 	}
 	return (int)msg.wParam;
 }
-
-	
