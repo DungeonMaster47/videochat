@@ -308,6 +308,18 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 		HDC hDC = BeginPaint(hWnd, &ps);
 		TextOut(hDC, frame::WIDTH + 10, main_window::HEIGHT - 30, "IP:", 3);
 		TextOut(hDC, frame::WIDTH + 150, main_window::HEIGHT - 30, "Port:", 5);
+		DWORD* pixels = new DWORD[frame::WIDTH * frame::HEIGHT];
+
+		for (size_t i = 0; i < frame::WIDTH * frame::HEIGHT; ++i)
+			pixels[i] = 0;
+
+		HBITMAP hBitmap = CreateBitmap(frame::WIDTH, frame::HEIGHT, 1, 32, pixels);
+
+		DrawBitmap(hDC, 0, 0, hBitmap);
+		DrawBitmap(hDC, 0, frame::HEIGHT, hBitmap);
+		DeleteObject(hBitmap);
+		delete[] pixels;
+
 		EndPaint(hWnd, &ps);
 		break;
 	}
@@ -447,19 +459,6 @@ int CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_ HINSTANCE hPrevInstance, _In
 	SetWindowLong(hWnd, GWL_STYLE, GetWindowLong(hWnd, GWL_STYLE)&~WS_MAXIMIZEBOX);
 
 	ShowWindow(hWnd, SW_SHOW);
-
-	DWORD* pixels = new DWORD[frame::WIDTH * frame::HEIGHT];
-
-	for (size_t i = 0; i < frame::WIDTH * frame::HEIGHT; ++i)
-		pixels[i] = 0;
-
-	HBITMAP hBitmap = CreateBitmap(frame::WIDTH, frame::HEIGHT, 1, 32, pixels);
-
-	HDC hDC = GetDC(hWnd);
-	DrawBitmap(hDC, 0, 0, hBitmap);
-	DrawBitmap(hDC, 0, frame::HEIGHT, hBitmap);
-	ReleaseDC(hWnd, hDC);
-	DeleteObject(hBitmap);
 
 	if (!hWnd)
 	{
