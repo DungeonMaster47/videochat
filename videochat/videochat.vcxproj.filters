@@ -21,12 +21,24 @@
     <ClCompile Include="Socket.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="AudioPlayer.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="AudioRecorder.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="message_codes.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="Socket.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="AudioPlayer.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="AudioRecorder.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
   </ItemGroup>

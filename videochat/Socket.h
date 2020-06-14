@@ -5,8 +5,8 @@
 class Socket
 {
 private:
-	Socket(const Socket& s) {};
-	Socket& operator=(const Socket& s) {};
+	Socket(const Socket& s) = default;
+	Socket& operator=(const Socket& s) = default;
 
 	SOCKET sock = INVALID_SOCKET;
 	bool open = false;
@@ -29,7 +29,7 @@ public:
 	int recv(char* buf, size_t len);
 
 	Socket(const SOCKET s = INVALID_SOCKET);
-	Socket(Socket&& s) = default;
+	Socket(Socket&& s);
 	Socket& operator=(Socket&& s);
 	~Socket();
 };

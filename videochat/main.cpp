@@ -5,6 +5,8 @@
 #include <string>
 #include "message_codes.h"
 #include "Socket.h"
+#include "AudioPlayer.h"
+#include "AudioRecorder.h"
 
 #pragma comment(lib,"ws2_32.lib")
 
@@ -15,6 +17,7 @@
 #define ID_PORT_TEXTBOX 5
 #define ID_CONNECT_BUTTON 6
 #define ID_CAM_BUTTON 7
+#define ID_MIC_BUTTON 8
 
 namespace main_window {
 	constexpr char APP_NAME[] = "videochat";
@@ -36,6 +39,7 @@ struct MainWindow
 	HWND hSendButton;
 	HWND hConnectButton;
 	HWND hCamButton;
+	HWND hMicButton;
 	HWND hSendTextbox;
 	HWND hIPTextbox;
 	HWND hPortTextbox;
@@ -45,6 +49,8 @@ struct MainWindow
 	std::thread recorder;
 	std::thread receiver;
 	Socket sock;
+	AudioRecorder audioRecorder;
+	AudioPlayer audioPlayer;
 };
 
 void DrawBitmap(HDC hDC, const int x, const int y, HBITMAP hBitmap)
@@ -186,7 +192,7 @@ void Receive(MainWindow& self)
 	while (true)
 	{
 		buf.resize(BUFSIZE);
-		int result = self.sock.recv((char*)buf.data(), (int)buf.capacity());
+		int recieveSize = self.sock.recv((char*)buf.data(), (int)buf.capacity());
 
 		if (!self.sock.is_connected())
 		{
@@ -199,7 +205,7 @@ void Receive(MainWindow& self)
 			break;
 		}
 
-		buf.resize(result);
+		buf.resize(recieveSize);
 
 		switch (buf.back())
 		{
@@ -245,6 +251,16 @@ void Receive(MainWindow& self)
 			DeleteObject(hBitmap);
 			break;
 		}
+		case message_codes::SOUND:
+		{
+			std::vector<short> samples;
+			samples.resize(buf.size()/2);
+			if (samples.data() == nullptr)
+				break;
+			memcpy(samples.data(), buf.data(), buf.size());
+			self.audioPlayer.addSamples(samples);
+			break;
+		}
 		}
 
 	}
@@ -287,15 +303,34 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 		self.hWnd = hWnd;
 		self.hSendButton = CreateWindow("button", "Send", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30*2, 80, 30, hWnd, (HMENU)ID_SEND_BUTTON, 0, NULL);
 		self.hCamButton = CreateWindow("button", "Cam on/off", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30*3, 80, 30, hWnd, (HMENU)ID_CAM_BUTTON, 0, NULL);
+		self.hMicButton = CreateWindow("button", "Mic on/off", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH - 80, main_window::HEIGHT - 30 * 4, 80, 30, hWnd, (HMENU)ID_MIC_BUTTON, 0, NULL);
 		self.hConnectButton = CreateWindow("button", "Connect", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30, 80, 30, hWnd, (HMENU)ID_CONNECT_BUTTON, 0, NULL);
-		self.hSendTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT | ES_MULTILINE, frame::WIDTH, main_window::HEIGHT-30*3, frame::WIDTH-80, 30*2, hWnd, (HMENU)ID_SEND_TEXTBOX, 0, NULL);
+		self.hSendTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT | ES_MULTILINE, frame::WIDTH, main_window::HEIGHT-30*4, frame::WIDTH-80, 30*3, hWnd, (HMENU)ID_SEND_TEXTBOX, 0, NULL);
 		self.hIPTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT , frame::WIDTH+30, main_window::HEIGHT-30, frame::WIDTH-200, 30, hWnd, (HMENU)ID_IP_TEXTBOX, 0, NULL);
 		self.hPortTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT , frame::WIDTH+180, main_window::HEIGHT-30, frame::WIDTH-260, 30, hWnd, (HMENU)ID_PORT_TEXTBOX, 0, NULL);
-		self.hChatList = CreateWindow("listbox", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_HASSTRINGS | WS_VSCROLL, frame::WIDTH, 0, main_window::WIDTH-frame::WIDTH, main_window::HEIGHT-30*3, hWnd, (HMENU)ID_CHAT_LIST, 0, NULL);
+		self.hChatList = CreateWindow("listbox", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_HASSTRINGS | WS_VSCROLL, frame::WIDTH, 0, main_window::WIDTH-frame::WIDTH, main_window::HEIGHT-30*4, hWnd, (HMENU)ID_CHAT_LIST, 0, NULL);
 		self.receiver = std::thread();
 		self.recorder = std::thread();
 		self.isConnected = false;
 		self.isRecording = false;
+		try
+		{
+			self.audioPlayer.start();
+		}
+		catch(std::exception e)
+		{
+			MessageBox(hWnd, e.what(), main_window::APP_NAME, MB_OK | MB_ICONERROR);
+		}
+		Socket& sock = self.sock;
+		self.audioRecorder.setProcessingCallback([&sock](std::vector<short> samples)
+		{
+			std::vector<char> byteSamples;
+			byteSamples.resize(samples.size() * sizeof(short));
+			memcpy(byteSamples.data(), samples.data(), byteSamples.size());
+			byteSamples.push_back(message_codes::SOUND);
+			sock.send((byteSamples.data()), byteSamples.size());
+		});
+
 
 		return DefWindowProc(hWnd, uMsg, wParam, lParam);
 	}
@@ -333,6 +368,8 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 	}
 	case WM_DESTROY:
 	{
+		self.audioRecorder.stop();
+		self.audioPlayer.stop();
 		self.sock.close();
 		self.isRecording = false;
 		if (self.receiver.joinable())
@@ -412,6 +449,25 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 						self.recorder.join();
 					self.isRecording = true;
 					self.recorder = std::thread(Record, hWnd, std::ref(self.sock), std::ref(self.isRecording));
+				}
+				break;
+			}
+			case ID_MIC_BUTTON:
+			{
+				if (self.audioRecorder.isRecording())
+				{
+					self.audioRecorder.stop();
+				}
+				else
+				{
+					try
+					{
+						self.audioRecorder.start();
+					}
+					catch(std::exception e)
+					{
+						MessageBox(hWnd, e.what(), main_window::APP_NAME, MB_OK | MB_ICONERROR);
+					}
 				}
 				break;
 			}

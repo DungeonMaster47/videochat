@@ -32,9 +32,12 @@ void ReceiveAndSend(Socket& sender, Socket& receiver)
 			receiver.send(buf, 1);
 			break;
 		}
+		*Log::getInstance() << "received packet size:" << len << std::endl;
 		if (receiver.send(buf, len) == SOCKET_ERROR)
 			break;
+		*Log::getInstance() << "sent packet size:" << len << std::endl;
 	}
+	*Log::getInstance() << "client disconnected" << std::endl;
 	receiver.close();
 	delete[] buf;
 }
@@ -118,6 +121,7 @@ DWORD WINAPI ServiceWorkerThread(LPVOID lpParam)
 	}
 
 	listen_socket.close();
+	*Log::getInstance() << "exit" << std::endl;
 	return ERROR_SUCCESS;
 }
 

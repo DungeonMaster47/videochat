@@ -1,5 +1,16 @@
 #include "Socket.h"
 
+Socket::Socket(Socket&& s)
+{
+	sock = s.sock;
+	connected = s.connected;
+	open = s.open;
+
+	s.sock = INVALID_SOCKET;
+	s.connected = false;
+	s.open = false;
+}
+
 Socket::Socket(const SOCKET s)
 {
 	if (INVALID_SOCKET == s)
@@ -25,6 +36,7 @@ Socket& Socket::operator=(Socket && s)
 	s.sock = INVALID_SOCKET;
 	s.connected = false;
 	s.open = false;
+
 	return *this;
 }
 
@@ -157,7 +169,10 @@ int Socket::send(const char * buf, size_t len)
 
 	if (!connected || !open)
 		return SOCKET_ERROR;
-	int result = ::send(sock, buf, (int)len, 0);
+	int result = ::send(sock, reinterpret_cast<const char*>(&len), sizeof(size_t), 0);
+	if (SOCKET_ERROR == result)
+		connected = false;
+	result = ::send(sock, buf, (int)len, 0);
 	if (SOCKET_ERROR == result)
 		connected = false;
 
@@ -170,11 +185,24 @@ int Socket::recv(char * buf, size_t len)
 
 	if (!connected || !open)
 		return SOCKET_ERROR;
+	size_t packetSize = 0;
+	int bytesRead = ::recv(sock, reinterpret_cast<char*>(&packetSize), sizeof(size_t), 0);
+	if (bytesRead != sizeof(size_t))
+		return SOCKET_ERROR;
+	if (packetSize > len)
+	{
+		char* newBuf = new char[packetSize];
+		bytesRead = ::recv(sock, newBuf, packetSize, 0);
+		delete[] newBuf;
+		return SOCKET_ERROR;
+	}
 
-	int result = ::recv(sock, buf, (int)len, 0);
-
-	if (0 == result || SOCKET_ERROR == result)
+	bytesRead = ::recv(sock, buf, packetSize, 0);
+	if (0 == bytesRead || SOCKET_ERROR == bytesRead)
+	{
 		connected = false;
+		return SOCKET_ERROR;
+	}
 
-	return result;
+	return packetSize;
 }
