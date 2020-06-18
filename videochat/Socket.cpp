@@ -163,32 +163,47 @@ bool Socket::close()
 	return true;
 }
 
-int Socket::send(const char * buf, size_t len)
+int Socket::send(const char * buf, int len)
 {
 	std::lock_guard<std::mutex> lock(send_m);
 
+	if (len <= 0)
+		return 0;
+
 	if (!connected || !open)
 		return SOCKET_ERROR;
-	int result = ::send(sock, reinterpret_cast<const char*>(&len), sizeof(size_t), 0);
+	int result = ::send(sock, reinterpret_cast<const char*>(&len), sizeof(int), 0);
 	if (SOCKET_ERROR == result)
 		connected = false;
-	result = ::send(sock, buf, (int)len, 0);
+	result = ::send(sock, buf, len, 0);
 	if (SOCKET_ERROR == result)
 		connected = false;
 
 	return result;
 }
 
-int Socket::recv(char * buf, size_t len)
+int Socket::recv(char * buf, int len)
 {
 	std::lock_guard<std::mutex> lock(recv_m);
 
 	if (!connected || !open)
 		return SOCKET_ERROR;
-	size_t packetSize = 0;
-	int bytesRead = ::recv(sock, reinterpret_cast<char*>(&packetSize), sizeof(size_t), 0);
-	if (bytesRead != sizeof(size_t))
+	int packetSize = 0;
+	int bytesRead = ::recv(sock, reinterpret_cast<char*>(&packetSize), sizeof(int), 0);
+	if (0 == bytesRead || SOCKET_ERROR == bytesRead)
+	{
+		connected = false;
 		return SOCKET_ERROR;
+	}
+
+	if (bytesRead != sizeof(int))
+		return SOCKET_ERROR;
+
+	if (packetSize <= 0)
+	{
+		return SOCKET_ERROR;
+	}
+
 	if (packetSize > len)
 	{
 		char* newBuf = new char[packetSize];
@@ -198,6 +213,7 @@ int Socket::recv(char * buf, size_t len)
 	}
 
 	bytesRead = ::recv(sock, buf, packetSize, 0);
+
 	if (0 == bytesRead || SOCKET_ERROR == bytesRead)
 	{
 		connected = false;

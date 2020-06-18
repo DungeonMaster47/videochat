@@ -17,6 +17,9 @@ DWORD WINAPI AudioRecorder::waveInProc(LPVOID arg)
 		{
 			LPWAVEHDR lpWaveHeader = (LPWAVEHDR)msg.lParam;
 			HWAVEIN hwi = (HWAVEIN)msg.wParam;
+			if (lpWaveHeader->dwBytesRecorded == 0)
+				continue;
+
 			std::vector<short> samples;
 
 			samples.resize(lpWaveHeader->dwBytesRecorded / sizeof(short));
@@ -77,6 +80,7 @@ AudioRecorder::AudioRecorder(size_t bufNum, size_t sampleRate) : m_bufNum(bufNum
 
 bool AudioRecorder::start()
 {
+	stop();
 	if (!isRecordingDeviceAvailable())
 		throw std::exception("No recording device available");
 

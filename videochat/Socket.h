@@ -25,8 +25,8 @@ public:
 	bool set_blocking_mode();
 	bool set_non_blocking_mode();
 	bool close();
-	int send(const char* buf, size_t len);
-	int recv(char* buf, size_t len);
+	int send(const char* buf, int len);
+	int recv(char* buf, int len);
 
 	Socket(const SOCKET s = INVALID_SOCKET);
 	Socket(Socket&& s);

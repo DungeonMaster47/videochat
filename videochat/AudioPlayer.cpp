@@ -50,6 +50,7 @@ AudioPlayer::AudioPlayer(size_t sampleRate) : m_sampleRate(sampleRate)
 
 bool AudioPlayer::start()
 {
+	stop();
 	if (!isOutDeviceAvailable())
 		throw std::exception("No recording device available");
 

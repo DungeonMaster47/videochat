@@ -205,6 +205,9 @@ void Receive(MainWindow& self)
 			break;
 		}
 
+		if (recieveSize <= 0)
+			continue;
+
 		buf.resize(recieveSize);
 
 		switch (buf.back())
@@ -254,6 +257,7 @@ void Receive(MainWindow& self)
 		case message_codes::SOUND:
 		{
 			std::vector<short> samples;
+			samples.reserve(buf.size()/2+1);
 			samples.resize(buf.size()/2);
 			if (samples.data() == nullptr)
 				break;
@@ -302,8 +306,8 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 		
 		self.hWnd = hWnd;
 		self.hSendButton = CreateWindow("button", "Send", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30*2, 80, 30, hWnd, (HMENU)ID_SEND_BUTTON, 0, NULL);
-		self.hCamButton = CreateWindow("button", "Cam on/off", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30*3, 80, 30, hWnd, (HMENU)ID_CAM_BUTTON, 0, NULL);
-		self.hMicButton = CreateWindow("button", "Mic on/off", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH - 80, main_window::HEIGHT - 30 * 4, 80, 30, hWnd, (HMENU)ID_MIC_BUTTON, 0, NULL);
+		self.hCamButton = CreateWindow("button", "Cam on", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30*3, 80, 30, hWnd, (HMENU)ID_CAM_BUTTON, 0, NULL);
+		self.hMicButton = CreateWindow("button", "Mic on", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH - 80, main_window::HEIGHT - 30 * 4, 80, 30, hWnd, (HMENU)ID_MIC_BUTTON, 0, NULL);
 		self.hConnectButton = CreateWindow("button", "Connect", WS_CHILD | BS_PUSHBUTTON | WS_VISIBLE, main_window::WIDTH-80, main_window::HEIGHT-30, 80, 30, hWnd, (HMENU)ID_CONNECT_BUTTON, 0, NULL);
 		self.hSendTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT | ES_MULTILINE, frame::WIDTH, main_window::HEIGHT-30*4, frame::WIDTH-80, 30*3, hWnd, (HMENU)ID_SEND_TEXTBOX, 0, NULL);
 		self.hIPTextbox = CreateWindow("edit", NULL, WS_BORDER | WS_VISIBLE | WS_CHILD | ES_LEFT , frame::WIDTH+30, main_window::HEIGHT-30, frame::WIDTH-200, 30, hWnd, (HMENU)ID_IP_TEXTBOX, 0, NULL);
@@ -324,6 +328,8 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 		Socket& sock = self.sock;
 		self.audioRecorder.setProcessingCallback([&sock](std::vector<short> samples)
 		{
+			if (samples.size() <= 0)
+				return;
 			std::vector<char> byteSamples;
 			byteSamples.resize(samples.size() * sizeof(short));
 			memcpy(byteSamples.data(), samples.data(), byteSamples.size());
@@ -438,10 +444,14 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 			}
 			case ID_CAM_BUTTON:
 			{
+				if (!self.isConnected)
+					break;
+
 				if (self.isRecording.load())
 				{
 					self.isRecording = false;
 					self.recorder.join();
+					SendMessage(self.hCamButton, WM_SETTEXT, NULL, (LPARAM)"Cam on");
 				}
 				else
 				{
@@ -449,20 +459,26 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In
 						self.recorder.join();
 					self.isRecording = true;
 					self.recorder = std::thread(Record, hWnd, std::ref(self.sock), std::ref(self.isRecording));
+					SendMessage(self.hCamButton, WM_SETTEXT, NULL, (LPARAM)"Cam off");
 				}
 				break;
 			}
 			case ID_MIC_BUTTON:
 			{
+				if (!self.isConnected)
+					break;
+
 				if (self.audioRecorder.isRecording())
 				{
 					self.audioRecorder.stop();
+					SendMessage(self.hMicButton, WM_SETTEXT, NULL, (LPARAM)"Mic on");
 				}
 				else
 				{
 					try
 					{
 						self.audioRecorder.start();
+						SendMessage(self.hMicButton, WM_SETTEXT, NULL, (LPARAM)"Mic off");
 					}
 					catch(std::exception e)
 					{
