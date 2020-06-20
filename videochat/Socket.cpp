@@ -189,12 +189,16 @@ int Socket::recv(char * buf, int len)
 	if (!connected || !open)
 		return SOCKET_ERROR;
 	int packetSize = 0;
-	int bytesRead = ::recv(sock, reinterpret_cast<char*>(&packetSize), sizeof(int), 0);
-	if (0 == bytesRead || SOCKET_ERROR == bytesRead)
-	{
-		connected = false;
-		return SOCKET_ERROR;
-	}
+	int bytesRead = 0;
+	do {
+		int tmp = ::recv(sock, reinterpret_cast<char*>(&packetSize) + bytesRead, sizeof(int) - bytesRead, 0);
+		if (0 == tmp || SOCKET_ERROR == tmp)
+		{
+			connected = false;
+			return SOCKET_ERROR;
+		}
+		bytesRead += tmp;
+	} while (bytesRead != sizeof(int));
 
 	if (bytesRead != sizeof(int))
 		return SOCKET_ERROR;
@@ -212,13 +216,17 @@ int Socket::recv(char * buf, int len)
 		return SOCKET_ERROR;
 	}
 
-	bytesRead = ::recv(sock, buf, packetSize, 0);
+	bytesRead = 0;
 
-	if (0 == bytesRead || SOCKET_ERROR == bytesRead)
-	{
-		connected = false;
-		return SOCKET_ERROR;
-	}
+	do {
+		int tmp = ::recv(sock, buf + bytesRead, packetSize - bytesRead, 0);
+		if (0 == tmp || SOCKET_ERROR == tmp)
+		{
+			connected = false;
+			return SOCKET_ERROR;
+		}
+		bytesRead += tmp;
+	} while (bytesRead != packetSize);
 
 	return packetSize;
 }
